@@ -10,7 +10,11 @@ export const baseConfig: UserConfig = {
 		},
 		root: resolve(import.meta.dirname),
 		globals: true,
-		watchExclude: ['coverage', 'html/**', '**/*.db'],
+	},
+	server: {
+		watch: {
+			ignored: ['**/coverage/**', '**/html/**', '**/*.db', '**/*.db-journal'],
+		},
 	},
 	resolve: {
 		alias: {

@@ -17,7 +17,7 @@ import {
 import {type Database} from '@/db/type.js';
 import {buildFastify} from '@/fastify.js';
 
-describe('MyController Integration Tests', () => {
+describe('OrderController Integration Tests', () => {
 	let fastify: FastifyInstance;
 	let database: Database;
 	let notificationServiceMock: DeepMockProxy<INotificationService>;
@@ -42,14 +42,58 @@ describe('MyController Integration Tests', () => {
 		const orderId = database.transaction(tx => {
 			const productList = tx.insert(products).values(allProducts).returning({productId: products.id}).all();
 			const order = tx.insert(orders).values([{}]).returning({orderId: orders.id}).get();
-			tx.insert(ordersToProducts).values(productList.map(p => ({orderId: order!.orderId, productId: p.productId}))).run();
-			return order!.orderId;
+			tx.insert(ordersToProducts).values(productList.map(p => ({orderId: order.orderId, productId: p.productId}))).run();
+			return order.orderId;
 		});
 
-		await client.post(`/orders/${orderId}/processOrder`).expect(200).expect('Content-Type', /application\/json/);
+		await client.post(`/orders/${orderId}/processOrder`)
+			.expect(200)
+			.expect('Content-Type', /application\/json/)
+			.expect({orderId});
 
 		const resultOrder = await database.query.orders.findFirst({where: eq(orders.id, orderId)});
 		expect(resultOrder!.id).toBe(orderId);
+	});
+
+	it('ProcessOrderShouldReturn422WhenAProductTypeIsUnknown', async () => {
+		const client = supertest(fastify.server);
+		const orderId = database.transaction(tx => {
+			const productList = tx.insert(products).values([
+				{
+					leadTime: 15, available: 30, type: 'NORMAL', name: 'USB Cable',
+				},
+				{
+					leadTime: 5, available: 10, type: 'UNKNOWN', name: 'Mystery Box',
+				},
+			]).returning({productId: products.id}).all();
+			const order = tx.insert(orders).values([{}]).returning({orderId: orders.id}).get();
+			tx.insert(ordersToProducts).values(productList.map(p => ({orderId: order.orderId, productId: p.productId}))).run();
+			return order.orderId;
+		});
+
+		const response = await client.post(`/orders/${orderId}/processOrder`).expect(422);
+
+		expect(response.body).toEqual({
+			statusCode: 422,
+			error: 'Unprocessable Entity',
+			message: 'Unknown product type: "UNKNOWN"',
+		});
+		const cable = await database.query.products.findFirst({where: eq(products.name, 'USB Cable')});
+		expect(cable!.available).toBe(30);
+	});
+
+	it('ProcessOrderShouldReturn422WhenTheOrderDoesNotExist', async () => {
+		const response = await supertest(fastify.server).post('/orders/404/processOrder').expect(422);
+
+		expect(response.body).toEqual({
+			statusCode: 422,
+			error: 'Unprocessable Entity',
+			message: 'Order 404 not found',
+		});
+	});
+
+	it('ProcessOrderShouldReturn400WhenOrderIdIsNotANumber', async () => {
+		await supertest(fastify.server).post('/orders/abc/processOrder').expect(400);
 	});
 
 	function createProducts(): ProductInsert[] {
